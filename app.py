@@ -29,6 +29,7 @@ with st.sidebar:
     st.header("Financial Parameters")
     holding_cost_pct = st.slider("Annual Holding Cost (%)", 0.10, 0.40, 0.20, 0.02, help="Cost of capital, warehousing, and risk.")
     st.markdown("---")
+    # Buttons still use use_container_width, but dataframes use width="stretch"
     run_sim = st.button("🔄 Run 52-Week Simulation", type="primary", use_container_width=True)
 
 # --- MAIN UI TABS ---
@@ -38,9 +39,10 @@ with tab1:
     st.subheader("Edit SKU Parameters")
     st.write("Click into any cell to adjust unit economics, lead times, or demand volatility before running the simulation.")
     
+    # Updated to width="stretch"
     edited_df = st.data_editor(
         st.session_state.sku_df, 
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="dynamic"
     )
@@ -54,15 +56,16 @@ if run_sim:
         summary_metrics = []
 
         for index, row in edited_df.iterrows():
-            sku = row["SKU"]
-            cost = row["Cost (£)"]
-            price = row["Price (£)"]
-            mean_demand = row["Weekly Demand"]
-            vol = row["Volatility (%)"] / 100.0
-            lt = int(row["Lead Time (Wks)"])
-            order_cost = row["Order Cost (£)"]
+            # Safe extraction in case of empty rows
+            sku = str(row.get("SKU", f"Item_{index}"))
+            cost = float(row.get("Cost (£)", 0))
+            price = float(row.get("Price (£)", 0))
+            mean_demand = float(row.get("Weekly Demand", 0))
+            vol = float(row.get("Volatility (%)", 0)) / 100.0
+            lt = int(row.get("Lead Time (Wks)", 0))
+            order_cost = float(row.get("Order Cost (£)", 0))
             
-            demand = np.random.normal(mean_demand, mean_demand * vol, weeks)
+            demand = np.random.normal(mean_demand, mean_demand * vol, weeks) if mean_demand > 0 else np.zeros(weeks)
             demand = np.maximum(demand, 0).astype(int)
             
             annual_demand = sum(demand)
@@ -71,12 +74,12 @@ if run_sim:
             eoq = np.sqrt((2 * annual_demand * order_cost) / holding_cost_per_unit) if holding_cost_per_unit > 0 else 0
             order_qty = int(eoq)
             
-            std_dev_lt = np.std(demand) * np.sqrt(lt)
+            std_dev_lt = np.std(demand) * np.sqrt(lt) if lt > 0 else 0
             safety_stock = int(1.64 * std_dev_lt) 
             reorder_point = int((mean_demand * lt) + safety_stock)
             
             on_hand = reorder_point + order_qty
-            in_transit = [0] * (weeks + lt)
+            in_transit = [0] * (weeks + lt + 1)
             
             sku_rows = []
             stockouts = 0
@@ -96,12 +99,12 @@ if run_sim:
                     stockouts += (current_demand - on_hand)
                     on_hand = 0
                 
-                pipeline_inventory = sum(in_transit[w:w+lt])
+                pipeline_inventory = sum(in_transit[w:w+lt]) if lt > 0 else 0
                 if (on_hand + pipeline_inventory) <= reorder_point:
                     in_transit[w + lt] += order_qty
                 
                 inv_value = on_hand * cost
-                transit_value = sum(in_transit[w:w+lt]) * cost
+                transit_value = sum(in_transit[w:w+lt]) * cost if lt > 0 else 0
                 weekly_holding = inv_value * (holding_cost_pct / 52)
                 
                 total_holding_cost += weekly_holding
@@ -113,14 +116,14 @@ if run_sim:
                     "Demand": current_demand,
                     "Sales": sales,
                     "End On-Hand": on_hand,
-                    "Arriving Next": in_transit[w+1],
+                    "Arriving Next": in_transit[w+1] if lt > 0 else 0,
                     "Capital in Warehouse (£)": inv_value,
                     "Capital on Ocean/Road (£)": transit_value
                 })
             
             sim_data.extend(sku_rows)
             
-            service_level = (sum(demand) - stockouts) / sum(demand) * 100 if sum(demand) > 0 else 100
+            service_level = ((sum(demand) - stockouts) / sum(demand) * 100) if sum(demand) > 0 else 100.0
             avg_warehouse_cap = sum([r["Capital in Warehouse (£)"] for r in sku_rows]) / weeks
             avg_transit_cap = total_transit_capital / weeks
             
@@ -152,16 +155,21 @@ if run_sim:
             st.markdown("---")
             st.write("**SKU-Level Financial Breakdown:**")
             
-            st.dataframe(df_summary.style.format({
-                "Service Level (%)": "{:.1f}%",
-                "Lost Sales (£)": "£{:,.0f}",
-                "Avg. Capital in Warehouse (£)": "£{:,.0f}",
-                "Avg. Capital in Transit (£)": "£{:,.0f}",
-                "Total Cash Tied Up (£)": "£{:,.0f}",
-                "Annual Holding Cost (£)": "£{:,.0f}"
-            }).background_gradient(subset=["Total Cash Tied Up (£)"], cmap="Reds") \
-              .background_gradient(subset=["Service Level (%)"], cmap="RdYlGn", vmin=85, vmax=100), 
-            use_container_width=True, hide_index=True)
+            # Apply gradient BEFORE format to avoid crash
+            styled_df = (df_summary.style
+                .background_gradient(subset=["Total Cash Tied Up (£)"], cmap="Reds")
+                .background_gradient(subset=["Service Level (%)"], cmap="RdYlGn", vmin=85, vmax=100)
+                .format({
+                    "Service Level (%)": "{:.1f}%",
+                    "Lost Sales (£)": "£{:,.0f}",
+                    "Avg. Capital in Warehouse (£)": "£{:,.0f}",
+                    "Avg. Capital in Transit (£)": "£{:,.0f}",
+                    "Total Cash Tied Up (£)": "£{:,.0f}",
+                    "Annual Holding Cost (£)": "£{:,.0f}"
+                })
+            )
+            
+            st.dataframe(styled_df, width="stretch", hide_index=True)
 
         with tab3:
             st.subheader("Raw Operations Data Extract")
