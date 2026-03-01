@@ -6,13 +6,13 @@ import scipy.stats as stats
 st.set_page_config(page_title="S&OP Working Capital Simulator", layout="wide")
 
 st.title("📦 10-SKU Portfolio S&OP Simulator")
-st.caption("Newsvendor-Optimized Inventory Management & Working Capital")
+st.caption("Newsvendor-Optimized Inventory Management & CPFR Retail Tracking")
 
 # --- 1. DEFAULT SKU DATABASE ---
 default_skus = [
     {"SKU": "Core Leather Lifting Belt", "Cost (£)": 18, "Price (£)": 60, "Weekly Demand": 800, "Volatility (%)": 10, "Lead Time (Wks)": 8, "Order Cost (£)": 500},
     {"SKU": "Pro Training Gloves", "Cost (£)": 8, "Price (£)": 25, "Weekly Demand": 1200, "Volatility (%)": 15, "Lead Time (Wks)": 6, "Order Cost (£)": 300},
-    {"SKU": "Neoprene Knee Sleeves", "Cost (£)": 12, "Price (£)": 40, "Weekly Demand": 400, "Volatility (%)": 45, "Lead Time (Wks)": 3, "Order Cost (£)": 200},
+    {"SKU": "Padded Cotton Lifting Strap", "Cost (£)": 4, "Price (£)": 15, "Weekly Demand": 3000, "Volatility (%)": 45, "Lead Time (Wks)": 10, "Order Cost (£)": 200},
     {"SKU": "Basic Speed Jump Rope", "Cost (£)": 3, "Price (£)": 15, "Weekly Demand": 2000, "Volatility (%)": 5, "Lead Time (Wks)": 8, "Order Cost (£)": 400},
     {"SKU": "Premium Yoga Mat", "Cost (£)": 15, "Price (£)": 65, "Weekly Demand": 500, "Volatility (%)": 60, "Lead Time (Wks)": 6, "Order Cost (£)": 350},
     {"SKU": "Resistance Band Set", "Cost (£)": 6, "Price (£)": 30, "Weekly Demand": 1500, "Volatility (%)": 20, "Lead Time (Wks)": 6, "Order Cost (£)": 300},
@@ -28,23 +28,16 @@ if 'sku_df' not in st.session_state:
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Financial Parameters")
-    holding_cost_pct = st.slider("Annual Holding Cost (%)", 0.10, 0.40, 0.20, 0.02, help="Cost of capital, warehousing, and risk.")
+    holding_cost_pct = st.slider("Annual Holding Cost (%)", 0.10, 0.40, 0.20, 0.02)
     st.markdown("---")
     run_sim = st.button("🔄 Run 52-Week Simulation", type="primary", use_container_width=True)
 
 # --- MAIN UI TABS ---
-tab1, tab2, tab3 = st.tabs(["🛠️ Portfolio Master Data", "📊 CFO Summary", "📥 52-Week Extract"])
+tab1, tab2, tab3, tab4 = st.tabs(["🛠️ Portfolio Master Data", "📊 CFO Summary", "📥 52-Week Extract", "🏢 Retailer CPFR Simulator"])
 
 with tab1:
     st.subheader("Edit SKU Parameters")
-    st.write("Click into any cell to adjust unit economics, lead times, or demand volatility before running the simulation.")
-    
-    edited_df = st.data_editor(
-        st.session_state.sku_df, 
-        width="stretch",
-        hide_index=True,
-        num_rows="dynamic"
-    )
+    edited_df = st.data_editor(st.session_state.sku_df, width="stretch", hide_index=True, num_rows="dynamic")
     st.session_state.sku_df = edited_df
 
 if run_sim:
@@ -67,15 +60,11 @@ if run_sim:
             demand = np.maximum(demand, 0).astype(int)
             annual_demand = sum(demand)
             
-            # --- NEWSVENDOR FINANCIAL LOGIC ---
             margin = price - cost
             holding_cost_per_unit = cost * holding_cost_pct
-            
-            # Critical Ratio (Target Service Level)
             critical_ratio = margin / (margin + holding_cost_per_unit) if (margin + holding_cost_per_unit) > 0 else 0.90
             z_score = stats.norm.ppf(critical_ratio)
             
-            # EOQ & Safety Stock
             eoq = np.sqrt((2 * annual_demand * order_cost) / holding_cost_per_unit) if holding_cost_per_unit > 0 else 0
             order_qty = int(eoq)
             
@@ -83,20 +72,17 @@ if run_sim:
             safety_stock = int(z_score * std_dev_lt) 
             reorder_point = int((mean_demand * lt) + safety_stock)
             
-            # Start simulation at an average cycle inventory position, not maximum
             on_hand = reorder_point + int(order_qty / 2)
             in_transit = [0] * (weeks + lt + 1)
             
             sku_rows = []
             stockouts = 0
-            total_holding_cost = 0
-            total_transit_capital = 0
+            total_holding_cost, total_transit_capital = 0, 0
             
             for w in range(weeks):
-                arriving_today = in_transit[w]
-                on_hand += arriving_today
-                
+                on_hand += in_transit[w]
                 current_demand = demand[w]
+                
                 if on_hand >= current_demand:
                     sales = current_demand
                     on_hand -= current_demand
@@ -117,68 +103,102 @@ if run_sim:
                 total_transit_capital += transit_value
                 
                 sku_rows.append({
-                    "Week": w + 1,
-                    "SKU": sku,
-                    "Demand": current_demand,
-                    "Sales": sales,
-                    "End On-Hand": on_hand,
-                    "Arriving Next": in_transit[w+1] if lt > 0 else 0,
-                    "Capital in Warehouse (£)": inv_value,
-                    "Capital on Ocean/Road (£)": transit_value
+                    "Week": w + 1, "SKU": sku, "Demand": current_demand, "Sales": sales,
+                    "End On-Hand": on_hand, "Arriving Next": in_transit[w+1] if lt > 0 else 0,
+                    "Capital in Warehouse (£)": inv_value, "Capital on Ocean/Road (£)": transit_value
                 })
             
             sim_data.extend(sku_rows)
-            
             actual_service_level = ((sum(demand) - stockouts) / sum(demand) * 100) if sum(demand) > 0 else 100.0
-            avg_warehouse_cap = sum([r["Capital in Warehouse (£)"] for r in sku_rows]) / weeks
-            avg_transit_cap = total_transit_capital / weeks
-            
             summary_metrics.append({
-                "SKU": sku,
-                "Target SL (%)": critical_ratio * 100,
-                "Actual SL (%)": actual_service_level,
+                "SKU": sku, "Target SL (%)": critical_ratio * 100, "Actual SL (%)": actual_service_level,
                 "Lost Sales (£)": stockouts * price,
-                "Avg. Capital in Warehouse (£)": avg_warehouse_cap,
-                "Avg. Capital in Transit (£)": avg_transit_cap,
-                "Total Cash Tied Up (£)": avg_warehouse_cap + avg_transit_cap
+                "Avg. Capital in Warehouse (£)": sum([r["Capital in Warehouse (£)"] for r in sku_rows]) / weeks,
+                "Avg. Capital in Transit (£)": total_transit_capital / weeks,
+                "Total Cash Tied Up (£)": (sum([r["Capital in Warehouse (£)"] for r in sku_rows]) / weeks) + (total_transit_capital / weeks)
             })
 
         df_sim = pd.DataFrame(sim_data)
         df_summary = pd.DataFrame(summary_metrics)
 
+        # --- CPFR GHOST LEDGER SIMULATION ---
+        # Simulating the DSG Padded Cotton Strap scenario
+        cpfr_weeks = 20
+        pos_baseline = 3000
+        retailer_system_inv = 18000 # Retailer thinks they have 6 weeks of supply
+        actual_physical_inv = 18000
+        ghost_ledger_inv = 18000
+        
+        cpfr_data = []
+        panic_triggered = False
+        
+        for w in range(1, cpfr_weeks + 1):
+            # 1. Retailer POS Scans (EDI 852 data we receive)
+            weekly_pos = int(np.random.normal(pos_baseline, pos_baseline * 0.15))
+            
+            # 2. Phantom Inventory occurs (Theft, backroom loss, mis-scans - approx 4% invisible shrink)
+            phantom_shrink = int(weekly_pos * 0.04)
+            
+            # 3. The Retailer's blind reality vs Actual physical reality
+            retailer_system_inv -= weekly_pos # Retailer ERP only deducts register scans
+            actual_physical_inv -= (weekly_pos + phantom_shrink) # Reality deducts scans AND shrink
+            
+            # 4. Our "Ghost Ledger" (We mathematically assume a 5% shrink buffer just to be safe)
+            ghost_ledger_inv -= int(weekly_pos * 1.05)
+            
+            # 5. Weeks of Supply (WOS) calculation
+            retailer_wos = retailer_system_inv / pos_baseline
+            ghost_wos = ghost_ledger_inv / pos_baseline
+            
+            status = "🟢 Stable"
+            if ghost_wos <= 1.5:
+                status = "🟡 Pre-Build Warning"
+            
+            # The exact moment the DSG shelves empty, but their computer says they have inventory
+            if actual_physical_inv <= 0 and not panic_triggered:
+                status = "🔴 PANIC PO INBOUND (Physical Stockout)"
+                panic_triggered = True
+                actual_physical_inv = 0 # Can't go below zero physically
+                
+            cpfr_data.append({
+                "Week": w,
+                "EDI POS Scans": weekly_pos,
+                "Retailer ERP Inventory": max(retailer_system_inv, 0),
+                "Retailer ERP WOS": round(retailer_wos, 1),
+                "Our Ghost Ledger": max(ghost_ledger_inv, 0),
+                "Our Ghost WOS": round(ghost_wos, 1),
+                "Actionable Alert": status
+            })
+            
+        df_cpfr = pd.DataFrame(cpfr_data)
+
+        # UI RENDER LOGIC
         with tab2:
             st.subheader("CFO Portfolio Financial Summary")
-            
-            total_cash = df_summary["Total Cash Tied Up (£)"].sum()
-            total_lost = df_summary["Lost Sales (£)"].sum()
-            avg_sl = df_summary["Actual SL (%)"].mean()
-            
             col1, col2, col3 = st.columns(3)
-            col1.metric("Total Portfolio Cash Tied Up", f"£{total_cash:,.0f}")
-            col2.metric("Total Lost Revenue (Stockouts)", f"£{total_lost:,.0f}")
-            col3.metric("Average Portfolio Service Level", f"{avg_sl:.1f}%")
-            
-            st.markdown("---")
-            st.write("**SKU-Level Target vs Actual Breakdown:**")
-            
-            st.dataframe(df_summary.style.format({
-                "Target SL (%)": "{:.1f}%",
-                "Actual SL (%)": "{:.1f}%",
-                "Lost Sales (£)": "£{:,.0f}",
-                "Avg. Capital in Warehouse (£)": "£{:,.0f}",
-                "Avg. Capital in Transit (£)": "£{:,.0f}",
-                "Total Cash Tied Up (£)": "£{:,.0f}"
-            }), width="stretch", hide_index=True)
+            col1.metric("Total Portfolio Cash Tied Up", f"£{df_summary['Total Cash Tied Up (£)'].sum():,.0f}")
+            col2.metric("Total Lost Revenue (Stockouts)", f"£{df_summary['Lost Sales (£)'].sum():,.0f}")
+            col3.metric("Average Portfolio Service Level", f"{df_summary['Actual SL (%)'].mean():,.1f}%")
+            st.dataframe(df_summary.style.format({"Target SL (%)": "{:.1f}%", "Actual SL (%)": "{:.1f}%", "Lost Sales (£)": "£{:,.0f}", "Avg. Capital in Warehouse (£)": "£{:,.0f}", "Avg. Capital in Transit (£)": "£{:,.0f}", "Total Cash Tied Up (£)": "£{:,.0f}"}), width="stretch", hide_index=True)
 
         with tab3:
             st.subheader("Raw Operations Data Extract")
-            csv = df_sim.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Full 52-Week Ledger (.CSV)",
-                data=csv,
-                file_name='Newsvendor_Simulation_Ledger.csv',
-                mime='text/csv',
-            )
+            st.download_button(label="📥 Download Full 52-Week Ledger (.CSV)", data=df_sim.to_csv(index=False).encode('utf-8'), file_name='Newsvendor_Simulation_Ledger.csv', mime='text/csv')
+
+        with tab4:
+            st.subheader("Retailer CPFR 'Ghost Ledger' Tracker")
+            st.write("Simulating a major big-box retailer (e.g., Dick's Sporting Goods) for the **Padded Cotton Lifting Strap**.")
+            st.markdown("""
+            * **The Trap:** The retailer's ERP system only tracks register scans, completely ignoring 'Phantom Inventory' (theft, backroom loss). 
+            * **The Strategy:** We calculate a 'Ghost Ledger' to buffer for invisible shrink. Notice how our system triggers a **Pre-Build Warning** weeks before the retailer's physical shelves actually hit zero, allowing us to prep raw materials before their panic order drops.
+            """)
+            
+            def highlight_alerts(val):
+                if "PANIC" in str(val): return 'background-color: #ffcccc; color: #900000; font-weight: bold'
+                elif "Warning" in str(val): return 'background-color: #fff4cc; color: #806000'
+                return ''
+                
+            st.dataframe(df_cpfr.style.map(highlight_alerts, subset=['Actionable Alert']), width="stretch", hide_index=True)
 else:
     with tab2:
         st.info("👈 Edit your Master Data in Tab 1, then click 'Run 52-Week Simulation' in the sidebar.")
