@@ -29,7 +29,6 @@ with st.sidebar:
     st.header("Financial Parameters")
     holding_cost_pct = st.slider("Annual Holding Cost (%)", 0.10, 0.40, 0.20, 0.02, help="Cost of capital, warehousing, and risk.")
     st.markdown("---")
-    # Buttons still use use_container_width, but dataframes use width="stretch"
     run_sim = st.button("🔄 Run 52-Week Simulation", type="primary", use_container_width=True)
 
 # --- MAIN UI TABS ---
@@ -39,10 +38,9 @@ with tab1:
     st.subheader("Edit SKU Parameters")
     st.write("Click into any cell to adjust unit economics, lead times, or demand volatility before running the simulation.")
     
-    # Updated to width="stretch"
     edited_df = st.data_editor(
         st.session_state.sku_df, 
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         num_rows="dynamic"
     )
@@ -56,7 +54,6 @@ if run_sim:
         summary_metrics = []
 
         for index, row in edited_df.iterrows():
-            # Safe extraction in case of empty rows
             sku = str(row.get("SKU", f"Item_{index}"))
             cost = float(row.get("Cost (£)", 0))
             price = float(row.get("Price (£)", 0))
@@ -155,21 +152,15 @@ if run_sim:
             st.markdown("---")
             st.write("**SKU-Level Financial Breakdown:**")
             
-            # Apply gradient BEFORE format to avoid crash
-            styled_df = (df_summary.style
-                .background_gradient(subset=["Total Cash Tied Up (£)"], cmap="Reds")
-                .background_gradient(subset=["Service Level (%)"], cmap="RdYlGn", vmin=85, vmax=100)
-                .format({
-                    "Service Level (%)": "{:.1f}%",
-                    "Lost Sales (£)": "£{:,.0f}",
-                    "Avg. Capital in Warehouse (£)": "£{:,.0f}",
-                    "Avg. Capital in Transit (£)": "£{:,.0f}",
-                    "Total Cash Tied Up (£)": "£{:,.0f}",
-                    "Annual Holding Cost (£)": "£{:,.0f}"
-                })
-            )
-            
-            st.dataframe(styled_df, width="stretch", hide_index=True)
+            # Formatted table WITHOUT the matplotlib gradient requirement
+            st.dataframe(df_summary.style.format({
+                "Service Level (%)": "{:.1f}%",
+                "Lost Sales (£)": "£{:,.0f}",
+                "Avg. Capital in Warehouse (£)": "£{:,.0f}",
+                "Avg. Capital in Transit (£)": "£{:,.0f}",
+                "Total Cash Tied Up (£)": "£{:,.0f}",
+                "Annual Holding Cost (£)": "£{:,.0f}"
+            }), use_container_width=True, hide_index=True)
 
         with tab3:
             st.subheader("Raw Operations Data Extract")
